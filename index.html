@@ -1,0 +1,1316 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>⚔️ Clash Royale Web - Game</title>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            width: 100%;
+            height: 100%;
+            background: #1a1a2e;
+            overflow: hidden;
+            font-family: 'Arial Black', sans-serif;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+        }
+        
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        canvas {
+            display: block;
+            max-width: 100%;
+            max-height: 100%;
+            border: 3px solid #00ff00;
+            box-shadow: 0 0 20px rgba(0, 255, 0, 0.5);
+        }
+        
+        #loader {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 9999;
+            text-align: center;
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+        
+        #loader.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .spinner {
+            border: 4px solid #444;
+            border-top: 4px solid #00ff00;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        #loader p {
+            color: #00ff00;
+            font-size: 16px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #00ff00;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container"></div>
+    <div id="loader">
+        <div class="spinner"></div>
+        <p>🎮 Inicializando Clash Royale...</p>
+    </div>
+
+    <!-- Phaser 3 -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.js"></script>
+
+    <script>
+// =====================================================
+// 🎮 CLASH ROYALE WEB - JUEGO COMPLETO CON ANIMACIONES
+// =====================================================
+
+// ==================== CONFIGURACIÓN ====================
+const GAME_CONFIG = {
+    type: Phaser.AUTO,
+    canvas: document.getElementById('game-container'),
+    render: {
+        pixelArt: false,
+        antialias: true,
+        antialiasGL: true,
+        smoothStep: true,
+        batchSize: 4096,
+        desynchronized: true,
+        failIfMajorPerformanceCaveat: false,
+    },
+    scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH,
+        width: 960,
+        height: 640,
+        orientation: Phaser.Scale.Orientation.LANDSCAPE,
+        expandParent: true,
+        autoOrientation: true,
+    },
+    physics: {
+        default: 'arcade',
+        arcade: {
+            gravity: { y: 0 },
+            debug: false,
+            maxEntities: 500,
+            useTree: true,
+            tileBias: 16,
+        },
+    },
+    scene: [BootScene, MenuScene, BattleScene, ResultScene],
+    input: {
+        touch: { target: document.getElementById('game-container') },
+        activePointers: 3,
+        gamepad: false,
+    },
+    audio: { disableWebAudio: false },
+    fps: { target: 60, forceSetTimeOut: false, smoothStep: true },
+};
+
+const GAME_SETTINGS = {
+    BATTLE_DURATION: 180,
+    MAX_ELIXIR: 10,
+    ELIXIR_REGEN_TIME: 2.8,
+    LANE_COUNT: 3,
+    CARD_HAND_SIZE: 4,
+    INITIAL_TOWER_HP: 1000,
+};
+
+const COLOR_PALETTE = {
+    primary: 0x00ff00,
+    secondary: 0xff0000,
+    neutral: 0xffffff,
+    background: 0x1a1a2e,
+    ui: 0x2d3561,
+    warning: 0xff9800,
+    success: 0x4caf50,
+    damage: 0xff5252,
+    heal: 0x00ff00,
+};
+
+const LAYER_DEPTH = {
+    BACKGROUND: 0,
+    MAP: 10,
+    TOWERS: 20,
+    TROOPS: 30,
+    SPELLS: 25,
+    EFFECTS: 40,
+    UI_BACK: 50,
+    UI_FRONT: 100,
+    DEBUG: 1000,
+};
+
+const BATTLE_MAP = {
+    WIDTH: 960,
+    HEIGHT: 640,
+    LEFT_LANE: 320,
+    CENTER_LANE: 480,
+    RIGHT_LANE: 640,
+    PLAYER_ZONE_Y: 480,
+    ENEMY_ZONE_Y: 160,
+};
+
+const LANES = {
+    LEFT: 0,
+    CENTER: 1,
+    RIGHT: 2,
+    GET_X: (lane) => [BATTLE_MAP.LEFT_LANE, BATTLE_MAP.CENTER_LANE, BATTLE_MAP.RIGHT_LANE][lane],
+};
+
+const TOWER_POSITIONS = {
+    PLAYER: {
+        KING: { x: 480, y: 560 },
+        LEFT_PRINCESS: { x: 320, y: 560 },
+        RIGHT_PRINCESS: { x: 640, y: 560 },
+    },
+    ENEMY: {
+        KING: { x: 480, y: 80 },
+        LEFT_PRINCESS: { x: 320, y: 80 },
+        RIGHT_PRINCESS: { x: 640, y: 80 },
+    },
+};
+
+// ==================== BASE DE DATOS DE CARTAS ====================
+const CARD_DATABASE = {
+    knight: {
+        id: 'knight',
+        name: 'Caballero',
+        type: 'troop',
+        cost: 3,
+        icon: '🗡️',
+        color: 0xffaa00,
+        stats: { hp: 100, damage: 20, attackSpeed: 1.2, speed: 80, range: 30, size: 32 },
+        ai_weight: 8,
+    },
+    archers: {
+        id: 'archers',
+        name: 'Arqueros',
+        type: 'troop',
+        cost: 3,
+        icon: '🏹',
+        color: 0x00ff00,
+        stats: { hp: 60, damage: 15, attackSpeed: 0.8, speed: 70, range: 120, size: 24 },
+        ai_weight: 9,
+    },
+    giant: {
+        id: 'giant',
+        name: 'Gigante',
+        type: 'troop',
+        cost: 5,
+        icon: '👹',
+        color: 0xaa4400,
+        stats: { hp: 300, damage: 40, attackSpeed: 2.0, speed: 40, range: 50, size: 48 },
+        ai_weight: 6,
+    },
+    skeletons: {
+        id: 'skeletons',
+        name: 'Esqueletos',
+        type: 'troop',
+        cost: 1,
+        icon: '💀',
+        color: 0xcccccc,
+        stats: { hp: 20, damage: 8, attackSpeed: 0.6, speed: 100, range: 30, size: 20 },
+        ai_weight: 7,
+    },
+    dragon: {
+        id: 'dragon',
+        name: 'Dragón',
+        type: 'troop',
+        cost: 6,
+        icon: '🐉',
+        color: 0xff00ff,
+        stats: { hp: 200, damage: 35, attackSpeed: 1.5, speed: 60, range: 100, size: 40, areaAttack: 80 },
+        ai_weight: 5,
+    },
+    wizard: {
+        id: 'wizard',
+        name: 'Mago',
+        type: 'troop',
+        cost: 4,
+        icon: '🧙',
+        color: 0x00aaff,
+        stats: { hp: 70, damage: 25, attackSpeed: 1.0, speed: 75, range: 150, size: 28, areaAttack: 60 },
+        ai_weight: 7,
+    },
+    bomb_tower: {
+        id: 'bomb_tower',
+        name: 'Torre Bomba',
+        type: 'building',
+        cost: 4,
+        icon: '💣',
+        color: 0xff8800,
+        stats: { hp: 250, damage: 50, attackSpeed: 3.0, range: 180, size: 36, areaAttack: 100, lifetime: 40 },
+        ai_weight: 6,
+    },
+    tesla: {
+        id: 'tesla',
+        name: 'Tesla',
+        type: 'building',
+        cost: 4,
+        icon: '⚡',
+        color: 0xffff00,
+        stats: { hp: 200, damage: 30, attackSpeed: 1.5, range: 150, size: 32, lifetime: 50 },
+        ai_weight: 7,
+    },
+    fireball: {
+        id: 'fireball',
+        name: 'Bola de Fuego',
+        type: 'spell',
+        cost: 4,
+        icon: '🔥',
+        color: 0xff3300,
+        stats: { damage: 80, range: 200, areaAttack: 120 },
+        ai_weight: 7,
+    },
+    arrow_spell: {
+        id: 'arrow_spell',
+        name: 'Flechas',
+        type: 'spell',
+        cost: 2,
+        icon: '⬆️',
+        color: 0x0099ff,
+        stats: { damage: 40, range: 300, areaAttack: 80 },
+        ai_weight: 9,
+    },
+    lightning: {
+        id: 'lightning',
+        name: 'Rayo',
+        type: 'spell',
+        cost: 5,
+        icon: '⚡',
+        color: 0x00ffff,
+        stats: { damage: 150, range: 250, areaAttack: 100 },
+        ai_weight: 5,
+    },
+    heal_spell: {
+        id: 'heal_spell',
+        name: 'Curación',
+        type: 'spell',
+        cost: 3,
+        icon: '💚',
+        color: 0x00ff00,
+        stats: { healing: 100, range: 200, areaAttack: 150 },
+        ai_weight: 4,
+    },
+};
+
+const DEFAULT_DECKS = [
+    {
+        name: 'Mazo Balanceado',
+        cards: ['knight', 'archers', 'skeletons', 'bomb_tower', 'fireball', 'arrow_spell', 'wizard', 'giant'],
+    },
+    {
+        name: 'Mazo Defensivo',
+        cards: ['tesla', 'bomb_tower', 'arrow_spell', 'fireball', 'giant', 'archers', 'knight', 'heal_spell'],
+    },
+    {
+        name: 'Mazo Ofensivo',
+        cards: ['dragon', 'giant', 'wizard', 'wizard', 'lightning', 'fireball', 'skeletons', 'knight'],
+    },
+];
+
+// ==================== PARTICLE MANAGER ====================
+class ParticleManager {
+    constructor(scene) {
+        this.scene = scene;
+    }
+
+    createExplosion(x, y, radius = 100, intensity = 1) {
+        const shockwave = this.scene.add.circle(x, y, 10, 0xff6600, 0.8);
+        this.scene.tweens.add({
+            targets: shockwave,
+            radius: radius,
+            alpha: 0,
+            duration: 400,
+            ease: 'Power2.out',
+            onComplete: () => shockwave.destroy(),
+        });
+
+        const fireParticles = this.scene.add.particles(0xff9900);
+        fireParticles.createEmitter({
+            speed: { min: -300, max: 300 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 1.5, end: 0 },
+            lifespan: 800,
+            gravityY: 200,
+        });
+        fireParticles.emitParticleAt(x, y, 20 * intensity);
+
+        const smokeParticles = this.scene.add.particles(0x888888);
+        smokeParticles.createEmitter({
+            speed: { min: -100, max: 100 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 2, end: 0 },
+            alpha: { start: 0.6, end: 0 },
+            lifespan: 1200,
+            gravityY: -100,
+        });
+        smokeParticles.emitParticleAt(x, y, 15 * intensity);
+
+        this.scene.time.delayedCall(1500, () => {
+            fireParticles.destroy();
+            smokeParticles.destroy();
+        });
+    }
+
+    createLightning(x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const distance = Phaser.Math.Distance.Between(x1, y1, x2, y2);
+        const angle = Math.atan2(dy, dx);
+
+        const lightning = this.scene.add.rectangle(x1 + dx / 2, y1 + dy / 2, distance, 3, 0x00ffff);
+        lightning.setRotation(angle);
+        lightning.setOrigin(0.5, 0.5);
+
+        this.scene.tweens.add({
+            targets: lightning,
+            alpha: [1, 0.3, 1, 0],
+            duration: 200,
+            ease: 'Power1.out',
+            onComplete: () => lightning.destroy(),
+        });
+
+        const electricParticles = this.scene.add.particles(0x00ffff);
+        electricParticles.createEmitter({
+            speed: { min: -150, max: 150 },
+            angle: { min: angle - 0.5, max: angle + 0.5 },
+            scale: { start: 0.8, end: 0 },
+            lifespan: 400,
+            gravityY: 100,
+        });
+        electricParticles.emitParticleAt(x2, y2, 10);
+
+        this.scene.time.delayedCall(500, () => electricParticles.destroy());
+    }
+
+    createDamageNumber(x, y, damage, isCritical = false) {
+        const config = isCritical ? 
+            { fontSize: '32px', fill: '#ffff00', fontStyle: 'bold' } :
+            { fontSize: '24px', fill: '#ff0000' };
+
+        const damageText = this.scene.add.text(x, y, damage.toString(), config);
+        damageText.setOrigin(0.5, 0.5);
+        damageText.setDepth(LAYER_DEPTH.EFFECTS);
+
+        this.scene.tweens.add({
+            targets: damageText,
+            y: y - 50,
+            alpha: 0,
+            duration: 1000,
+            ease: 'Power2.out',
+            onComplete: () => damageText.destroy(),
+        });
+    }
+
+    createHealing(x, y) {
+        const healParticles = this.scene.add.particles(0x00ff00);
+        healParticles.createEmitter({
+            speed: { min: 50, max: 150 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 0.5, end: 0 },
+            lifespan: 600,
+            gravityY: -150,
+        });
+        healParticles.emitParticleAt(x, y, 15);
+
+        this.scene.time.delayedCall(700, () => healParticles.destroy());
+    }
+
+    createDeathEffect(x, y) {
+        const deathParticles = this.scene.add.particles(0xff0000);
+        deathParticles.createEmitter({
+            speed: { min: -300, max: 300 },
+            angle: { min: 0, max: 360 },
+            scale: { start: 1.2, end: 0 },
+            lifespan: 800,
+            gravityY: 300,
+        });
+        deathParticles.emitParticleAt(x, y, 20);
+
+        this.scene.time.delayedCall(1000, () => deathParticles.destroy());
+    }
+
+    createConfetti(x, y) {
+        const colors = [0xff0000, 0x00ff00, 0x0000ff, 0xffff00];
+        for (let i = 0; i < 50; i++) {
+            const confetti = this.scene.add.rectangle(x, y, 8, 8, Phaser.Utils.Array.RandomElement(colors));
+            const tx = x + Phaser.Math.RND.Between(-200, 200);
+            const ty = y + 300;
+
+            this.scene.tweens.add({
+                targets: confetti,
+                x: tx,
+                y: ty,
+                rotation: Phaser.Math.RND.Between(0, 10),
+                alpha: 0,
+                duration: Phaser.Math.RND.Between(1000, 2000),
+                ease: 'Power2.in',
+                onComplete: () => confetti.destroy(),
+            });
+        }
+    }
+}
+
+// ==================== ANIMATION MANAGER ====================
+class AnimationManager {
+    constructor(scene) {
+        this.scene = scene;
+    }
+
+    animateMovement(unit, targetX, targetY, duration = 1000) {
+        return this.scene.tweens.add({
+            targets: unit,
+            x: targetX,
+            y: targetY,
+            duration: duration,
+            ease: 'Linear',
+        });
+    }
+
+    animateAttack(unit, targetUnit) {
+        const originalX = unit.x;
+        const originalY = unit.y;
+
+        this.scene.tweens.add({
+            targets: unit,
+            x: originalX + 15,
+            y: originalY - 5,
+            duration: 150,
+            ease: 'Power1.out',
+        });
+
+        this.scene.tweens.add({
+            targets: unit,
+            delay: 150,
+            x: originalX,
+            y: originalY,
+            duration: 150,
+            ease: 'Power1.in',
+        });
+    }
+
+    animateDamage(unit) {
+        this.scene.tweens.add({
+            targets: unit,
+            x: unit.x - 10,
+            y: unit.y - 5,
+            duration: 100,
+            yoyo: true,
+            repeat: 1,
+            ease: 'Power2.out',
+        });
+
+        this.scene.tweens.add({
+            targets: unit,
+            tint: 0xff0000,
+            duration: 100,
+            yoyo: true,
+            repeat: 2,
+            ease: 'Power1',
+            onComplete: () => unit.clearTint(),
+        });
+    }
+
+    animateDeath(unit) {
+        return this.scene.tweens.add({
+            targets: unit,
+            y: unit.y + 30,
+            alpha: 0,
+            scale: 0.8,
+            rotation: Phaser.Math.DegToRad(90),
+            duration: 600,
+            ease: 'Power2.in',
+            onComplete: () => unit.destroy(),
+        });
+    }
+
+    animateSpawn(unit) {
+        unit.setScale(0).setAlpha(0);
+
+        this.scene.tweens.add({
+            targets: unit,
+            scale: 1,
+            alpha: 1,
+            duration: 400,
+            ease: 'Elastic.out',
+        });
+
+        this.scene.tweens.add({
+            targets: unit,
+            y: unit.y + 10,
+            duration: 200,
+            ease: 'Bounce.out',
+        });
+    }
+}
+
+// ==================== TOWER CLASS ====================
+class Tower extends Phaser.Physics.Arcade.Sprite {
+    constructor(scene, x, y, type, isPlayer = true) {
+        super(scene, x, y);
+        scene.add.existing(this);
+        scene.physics.add.existing(this);
+
+        this.type = type;
+        this.isPlayer = isPlayer;
+        this.maxHP = GAME_SETTINGS.INITIAL_TOWER_HP;
+        this.hp = this.maxHP;
+
+        // Dibujar torre como rectángulo
+        const graphics = scene.make.graphics({ x, y, add: false });
+        graphics.fillStyle(isPlayer ? 0x00ff00 : 0xff0000, 1);
+        graphics.fillRect(-20, -40, 40, 60);
+        graphics.generateTexture('tower_' + type + isPlayer, 40, 60);
+        graphics.destroy();
+
+        this.setTexture('tower_' + type + isPlayer);
+        this.setImmovable(true);
+        this.setDepth(LAYER_DEPTH.TOWERS);
+
+        this.healthBar = scene.add.graphics();
+        this.updateHealthBar();
+    }
+
+    takeDamage(amount) {
+        this.hp = Math.max(0, this.hp - amount);
+        this.updateHealthBar();
+
+        if (this.hp <= 0) {
+            this.destroy();
+        }
+    }
+
+    updateHealthBar() {
+        this.healthBar.clear();
+        const barX = this.x - 30;
+        const barY = this.y - 50;
+        const barWidth = 60;
+        const barHeight = 5;
+
+        // Fondo
+        this.healthBar.fillStyle(0x000000, 0.8);
+        this.healthBar.fillRect(barX, barY, barWidth, barHeight);
+
+        // HP bar
+        const hpPercent = this.hp / this.maxHP;
+        const color = hpPercent > 0.5 ? 0x00ff00 : hpPercent > 0.25 ? 0xffaa00 : 0xff0000;
+        this.healthBar.fillStyle(color, 1);
+        this.healthBar.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+
+        this.healthBar.setDepth(LAYER_DEPTH.UI_BACK);
+    }
+
+    destroy() {
+        this.healthBar?.destroy();
+        super.destroy();
+    }
+}
+
+// ==================== UNIT BASE CLASS ====================
+class Unit extends Phaser.Physics.Arcade.Sprite {
+    constructor(scene, x, y, cardData, isPlayer = true) {
+        super(scene, x, y);
+        scene.add.existing(this);
+        scene.physics.add.existing(this);
+
+        this.cardData = cardData;
+        this.isPlayer = isPlayer;
+        this.stats = { ...cardData.stats };
+        this.hp = this.stats.hp;
+        this.state = 'idle';
+        this.target = null;
+        this.lastAttackTime = 0;
+        this.lane = 0;
+
+        // Dibujar unidad como círculo
+        const graphics = scene.make.graphics({ x, y, add: false });
+        graphics.fillStyle(cardData.color, 1);
+        graphics.fillCircle(this.stats.size / 2, this.stats.size / 2, this.stats.size / 2);
+        graphics.generateTexture('unit_' + cardData.id, this.stats.size, this.stats.size);
+        graphics.destroy();
+
+        this.setTexture('unit_' + cardData.id);
+        this.setCollideWorldBounds(true);
+        this.setDepth(LAYER_DEPTH.TROOPS);
+        this.setBounce(0.2);
+
+        // Health bar
+        this.healthBar = scene.add.graphics();
+        this.updateHealthBar();
+
+        // Icon label
+        this.label = scene.add.text(x, y, cardData.icon, { fontSize: '20px' });
+        this.label.setOrigin(0.5, 0.5);
+        this.label.setDepth(LAYER_DEPTH.TROOPS + 1);
+    }
+
+    takeDamage(amount) {
+        this.hp = Math.max(0, this.hp - amount);
+        this.updateHealthBar();
+
+        if (this.hp <= 0) {
+            this.die();
+        }
+    }
+
+    heal(amount) {
+        this.hp = Math.min(this.stats.hp, this.hp + amount);
+        this.updateHealthBar();
+    }
+
+    updateHealthBar() {
+        this.healthBar.clear();
+        const barX = this.x - 20;
+        const barY = this.y - this.stats.size / 2 - 10;
+        const barWidth = 40;
+        const barHeight = 4;
+
+        this.healthBar.fillStyle(0x000000, 0.8);
+        this.healthBar.fillRect(barX, barY, barWidth, barHeight);
+
+        const hpPercent = this.hp / this.stats.hp;
+        const color = hpPercent > 0.5 ? 0x00ff00 : hpPercent > 0.25 ? 0xffaa00 : 0xff0000;
+        this.healthBar.fillStyle(color, 1);
+        this.healthBar.fillRect(barX, barY, barWidth * hpPercent, barHeight);
+
+        this.healthBar.setDepth(LAYER_DEPTH.UI_BACK);
+    }
+
+    die() {
+        this.state = 'dead';
+        this.healthBar?.destroy();
+        this.label?.destroy();
+        this.destroy();
+    }
+
+    updatePosition() {
+        this.label.setPosition(this.x, this.y);
+    }
+
+    destroy() {
+        this.healthBar?.destroy();
+        this.label?.destroy();
+        super.destroy();
+    }
+}
+
+// ==================== PLAYER CLASS ====================
+class Player {
+    constructor(scene, isPlayer = true) {
+        this.scene = scene;
+        this.isPlayer = isPlayer;
+        this.elixir = 5;
+        this.maxElixir = GAME_SETTINGS.MAX_ELIXIR;
+        this.lastElixirRegenTime = 0;
+        this.units = [];
+        this.towers = [];
+        this.deck = [];
+        this.hand = [];
+        this.selectedCard = null;
+
+        // Crear torres
+        if (isPlayer) {
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.PLAYER.KING.x, TOWER_POSITIONS.PLAYER.KING.y, 'king', true));
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.PLAYER.LEFT_PRINCESS.x, TOWER_POSITIONS.PLAYER.LEFT_PRINCESS.y, 'princess', true));
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.PLAYER.RIGHT_PRINCESS.x, TOWER_POSITIONS.PLAYER.RIGHT_PRINCESS.y, 'princess', true));
+        } else {
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.ENEMY.KING.x, TOWER_POSITIONS.ENEMY.KING.y, 'king', false));
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.ENEMY.LEFT_PRINCESS.x, TOWER_POSITIONS.ENEMY.LEFT_PRINCESS.y, 'princess', false));
+            this.towers.push(new Tower(scene, TOWER_POSITIONS.ENEMY.RIGHT_PRINCESS.x, TOWER_POSITIONS.ENEMY.RIGHT_PRINCESS.y, 'princess', false));
+        }
+    }
+
+    setDeck(deckCardIds) {
+        this.deck = deckCardIds.map(id => CARD_DATABASE[id]);
+        this.drawCards();
+    }
+
+    drawCards() {
+        while (this.hand.length < GAME_SETTINGS.CARD_HAND_SIZE && this.deck.length > 0) {
+            const randomIndex = Phaser.Math.RND.Between(0, this.deck.length - 1);
+            this.hand.push(this.deck[randomIndex]);
+        }
+    }
+
+    canPlayCard(card) {
+        return this.elixir >= card.cost;
+    }
+
+    playCard(card, lane) {
+        if (!this.canPlayCard(card)) return false;
+
+        this.elixir -= card.cost;
+
+        const x = LANES.GET_X(lane);
+        const y = this.isPlayer ? BATTLE_MAP.PLAYER_ZONE_Y : BATTLE_MAP.ENEMY_ZONE_Y;
+
+        const unit = new Unit(this.scene, x, y, card, this.isPlayer);
+        unit.lane = lane;
+        this.units.push(unit);
+
+        // Remover carta de la mano
+        this.hand = this.hand.filter(c => c !== card);
+        this.drawCards();
+
+        return true;
+    }
+
+    updateElixir(deltaTime) {
+        this.lastElixirRegenTime += deltaTime;
+        if (this.lastElixirRegenTime >= GAME_SETTINGS.ELIXIR_REGEN_TIME * 1000) {
+            if (this.elixir < this.maxElixir) {
+                this.elixir++;
+            }
+            this.lastElixirRegenTime = 0;
+        }
+    }
+
+    getTotalTowerHP() {
+        return this.towers.reduce((sum, tower) => sum + tower.hp, 0);
+    }
+
+    getDestroyedTowerCount() {
+        return this.towers.length;
+    }
+
+    isAlive() {
+        return this.towers.length > 0;
+    }
+
+    cleanup() {
+        this.units.forEach(unit => unit.destroy());
+        this.towers.forEach(tower => tower.destroy());
+        this.units = [];
+        this.towers = [];
+    }
+}
+
+// ==================== BOOT SCENE ====================
+class BootScene extends Phaser.Scene {
+    constructor() {
+        super({ key: 'BootScene' });
+    }
+
+    preload() {
+        // Aquí se precargarían assets reales
+    }
+
+    create() {
+        // Crear texturas simples
+        const graphics = this.make.graphics({ x: 0, y: 0, add: false });
+
+        // Fondo
+        graphics.fillStyle(0x1a3a1a, 1);
+        graphics.fillRect(0, 0, BATTLE_MAP.WIDTH, BATTLE_MAP.HEIGHT);
+        graphics.generateTexture('battle_bg', BATTLE_MAP.WIDTH, BATTLE_MAP.HEIGHT);
+        graphics.destroy();
+
+        this.scene.start('MenuScene');
+    }
+}
+
+// ==================== MENU SCENE ====================
+class MenuScene extends Phaser.Scene {
+    constructor() {
+        super({ key: 'MenuScene' });
+    }
+
+    create() {
+        // Fondo
+        this.add.rectangle(480, 320, 960, 640, 0x1a1a2e);
+
+        // Título
+        this.add.text(480, 150, '⚔️ CLASH ROYALE ⚔️', {
+            fontSize: '64px',
+            fill: '#00ff00',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4,
+        }).setOrigin(0.5, 0.5).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        // Subtítulo
+        this.add.text(480, 220, 'Batalla en Tiempo Real', {
+            fontSize: '24px',
+            fill: '#ffffff',
+        }).setOrigin(0.5, 0.5).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        // Botón de empezar
+        const startButton = this.add.rectangle(480, 350, 200, 60, 0x00ff00);
+        const startButtonText = this.add.text(480, 350, 'JUGAR', {
+            fontSize: '32px',
+            fill: '#000000',
+            fontStyle: 'bold',
+        }).setOrigin(0.5, 0.5).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        startButton.setInteractive();
+        startButton.on('pointerdown', () => {
+            this.tweens.add({
+                targets: startButton,
+                scale: 0.9,
+                duration: 100,
+                yoyo: true,
+            });
+            this.scene.start('BattleScene');
+        });
+
+        startButton.on('pointerover', () => {
+            startButton.setFillStyle(0x00cc00);
+            startButtonText.setStyle({ fill: '#000000', fontSize: '36px' });
+        });
+
+        startButton.on('pointerout', () => {
+            startButton.setFillStyle(0x00ff00);
+            startButtonText.setStyle({ fill: '#000000', fontSize: '32px' });
+        });
+
+        startButton.setDepth(LAYER_DEPTH.UI_BACK);
+
+        // Info
+        this.add.text(480, 500, '📱 Toca o arrastra cartas para jugar\n⏱️ 3 minutos de batalla', {
+            fontSize: '16px',
+            fill: '#aaaaaa',
+            align: 'center',
+        }).setOrigin(0.5, 0.5).setDepth(LAYER_DEPTH.UI_FRONT);
+    }
+}
+
+// ==================== BATTLE SCENE ====================
+class BattleScene extends Phaser.Scene {
+    constructor() {
+        super({ key: 'BattleScene' });
+    }
+
+    create() {
+        // Setup
+        this.player = new Player(this, true);
+        this.enemy = new Player(this, false);
+
+        this.player.setDeck(DEFAULT_DECKS[0].cards);
+        this.enemy.setDeck(DEFAULT_DECKS[1].cards);
+
+        this.particleManager = new ParticleManager(this);
+        this.animationManager = new AnimationManager(this);
+
+        this.battleTime = GAME_SETTINGS.BATTLE_DURATION;
+        this.gameActive = true;
+
+        // Fondo
+        this.add.rectangle(480, 320, 960, 640, 0x1a3a1a).setDepth(LAYER_DEPTH.BACKGROUND);
+
+        // Divisiones de carriles
+        for (let i = 0; i < 4; i++) {
+            const x = 240 + (i * 240);
+            this.add.line(x, 0, x, 640, 0x444444, 0.3).setDepth(LAYER_DEPTH.MAP);
+        }
+
+        // UI - Temporizador
+        this.timerText = this.add.text(480, 20, '3:00', {
+            fontSize: '48px',
+            fill: '#00ff00',
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 3,
+        }).setOrigin(0.5, 0.5).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        // UI - Elixir
+        this.elixirText = this.add.text(50, 50, 'Elixir: 5/10', {
+            fontSize: '20px',
+            fill: '#00ff00',
+            stroke: '#000000',
+            strokeThickness: 2,
+        }).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        this.enemyElixirText = this.add.text(910, 50, 'Elixir: 5/10', {
+            fontSize: '20px',
+            fill: '#ff0000',
+            stroke: '#000000',
+            strokeThickness: 2,
+            align: 'right',
+        }).setOrigin(1, 0).setDepth(LAYER_DEPTH.UI_FRONT);
+
+        // Mano de cartas
+        this.drawHand();
+
+        // Input
+        this.input.on('pointermove', (pointer) => {
+            if (this.selectedCard && pointer.isDown) {
+                // Pointer over map
+                if (pointer.y < 400) {
+                    // Show preview
+                }
+            }
+        });
+
+        this.input.on('pointerup', (pointer) => {
+            if (this.selectedCard && pointer.y < 400) {
+                const lane = Math.floor((pointer.x / 960) * 3);
+                this.player.playCard(this.selectedCard, lane);
+                this.selectedCard = null;
+                this.drawHand();
+            }
+        });
+
+        // Bucle de actualización
+        this.time.addEvent({
+            delay: 100,
+            callback: this.updateBattle,
+            callbackScope: this,
+            loop: true,
+        });
+
+        // Cuenta regresiva
+        this.time.addEvent({
+            delay: 1000,
+            callback: this.updateTimer,
+            callbackScope: this,
+            loop: true,
+        });
+
+        // IA del enemigo
+        this.time.addEvent({
+            delay: 2000,
+            callback: this.aiMove,
+            callbackScope: this,
+            loop: true,
+        });
+    }
+
+    drawHand() {
+        // Limpiar cartas anteriores
+        this.children.list.forEach(child => {
+            if (child.isCard) child.destroy();
+        });
+
+        const hand = this.player.hand;
+        const startX = 480 - (hand.length * 110) / 2;
+
+        hand.forEach((card, i) => {
+            const x = startX + (i * 110);
+            const y = 590;
+
+            // Card background
+            const cardBg = this.add.rectangle(x, y, 90, 110, 0x2d3561, 1);
+            cardBg.setInteractive();
+            cardBg.setStrokeStyle(2, 0x00ff00);
+            cardBg.isCard = true;
+            cardBg.cardData = card;
+            cardBg.setDepth(LAYER_DEPTH.UI_BACK);
+
+            // Nombre
+            const name = this.add.text(x, y - 35, card.name, {
+                fontSize: '11px',
+                fill: '#ffffff',
+                align: 'center',
+                wordWrap: { width: 80 },
+            }).setOrigin(0.5, 0.5);
+            name.isCard = true;
+            name.setDepth(LAYER_DEPTH.UI_BACK);
+
+            // Icono
+            const icon = this.add.text(x, y + 5, card.icon, { fontSize: '32px' }).setOrigin(0.5, 0.5);
+            icon.isCard = true;
+            icon.setDepth(LAYER_DEPTH.UI_BACK);
+
+            // Costo
+            const cost = this.add.text(x - 40, y - 50, card.cost.toString(), {
+                fontSize: '20px',
+                fill: '#ffff00',
+                fontStyle: 'bold',
+                backgroundColor: '#0000ff',
+                padding: { x: 6, y: 3 },
+            }).setOrigin(0.5, 0.5);
+            cost.isCard = true;
+            cost.setDepth(LAYER_DEPTH.UI_BACK);
+
+            // Interactividad
+            cardBg.on('pointerdown', () => {
+                if (this.player.canPlayCard(card)) {
+                    this.selectedCard = card;
+                    cardBg.setFillStyle(0x00ff00, 1);
+                    cardBg.setStrokeStyle(3, 0xffff00);
+                } else {
+                    this.particleManager.createDamageNumber(x, y, 'X', false);
+                }
+            });
+
+            cardBg.on('pointerover', () => {
+                cardBg.setScale(1.05);
+            });
+
+            cardBg.on('pointerout', () => {
+                cardBg.setScale(1);
+                if (this.selectedCard !== card) {
+                    cardBg.setFillStyle(0x2d3561);
+                    cardBg.setStrokeStyle(2, 0x00ff00);
+                }
+            });
+        });
+    }
+
+    updateBattle() {
+        if (!this.gameActive) return;
+
+        // Actualizar unidades del jugador
+        this.player.units.forEach(unit => {
+            unit.updatePosition();
+
+            // Buscar objetivo
+            if (!unit.target || unit.target.hp <= 0) {
+                unit.target = this.findNearestTarget(unit, this.enemy.units, this.enemy.towers);
+            }
+
+            // Movimiento
+            if (unit.target) {
+                const distance = Phaser.Math.Distance.Between(unit.x, unit.y, unit.target.x, unit.target.y);
+
+                if (distance > unit.stats.range) {
+                    // Mover hacia objetivo
+                    const angle = Phaser.Math.Angle.Between(unit.x, unit.y, unit.target.x, unit.target.y);
+                    unit.setVelocity(
+                        Math.cos(angle) * unit.stats.speed,
+                        Math.sin(angle) * unit.stats.speed
+                    );
+                    unit.state = 'moving';
+                } else {
+                    // Atacar
+                    unit.setVelocity(0, 0);
+                    unit.state = 'attacking';
+
+                    const now = this.time.now;
+                    if (now - unit.lastAttackTime >= unit.stats.attackSpeed * 1000) {
+                        const damage = unit.stats.damage;
+                        unit.target.takeDamage(damage);
+                        this.particleManager.createDamageNumber(unit.target.x, unit.target.y, damage);
+                        this.animationManager.animateAttack(unit, unit.target);
+
+                        if (unit.stats.areaAttack) {
+                            this.particleManager.createExplosion(unit.target.x, unit.target.y, unit.stats.areaAttack);
+                        }
+
+                        unit.lastAttackTime = now;
+                    }
+                }
+            } else {
+                // Avanzar si no hay objetivo
+                const direction = this.player.isPlayer ? -1 : 1;
+                unit.setVelocity(direction * unit.stats.speed * 0.5, 0);
+            }
+        });
+
+        // Actualizar unidades del enemigo
+        this.enemy.units.forEach(unit => {
+            unit.updatePosition();
+
+            if (!unit.target || unit.target.hp <= 0) {
+                unit.target = this.findNearestTarget(unit, this.player.units, this.player.towers);
+            }
+
+            if (unit.target) {
+                const distance = Phaser.Math.Distance.Between(unit.x, unit.y, unit.target.x, unit.target.y);
+
+                if (distance > unit.stats.range) {
+                    const angle = Phaser.Math.Angle.Between(unit.x, unit.y, unit.target.x, unit.target.y);
+                    unit.setVelocity(
+                        Math.cos(angle) * unit.stats.speed,
+                        Math.sin(angle) * unit.stats.speed
+                    );
+                } else {
+                    unit.setVelocity(0, 0);
+                    const now = this.time.now;
+                    if (now - unit.lastAttackTime >= unit.stats.attackSpeed * 1000) {
+                        const damage = unit.stats.damage;
+                        unit.target.takeDamage(damage);
+                        this.particleManager.createDamageNumber(unit.target.x, unit.target.y, damage);
+                        this.animationManager.animateAttack(unit, unit.target);
+
+                        if (unit.stats.areaAttack) {
+                            this.particleManager.createExplosion(unit.target.x, unit.target.y, unit.stats.areaAttack);
+                        }
+
+                        unit.lastAttackTime = now;
+                    }
+                }
+            } else {
+                unit.setVelocity(unit.stats.speed * 0.5, 0);
+            }
+        });
+
+        // Limpiar unidades muertas
+        this.player.units = this.player.units.filter(u => u.hp > 0);
+        this.enemy.units = this.enemy.units.filter(u => u.hp > 0);
+
+        // Actualizar elixir
+        this.player.updateElixir(100);
+        this.enemy.updateElixir(100);
+
+        // Actualizar UI
+        this.elixirText.setText(`Elixir: ${this.player.elixir}/${this.player.maxElixir}`);
+        this.enemyElixirText.setText(`Elixir: ${this.enemy.elixir}/${this.enemy.maxElixir}`);
+
+        // Verificar fin del juego
+        if (!this.player.isAlive() || !this.enemy.isAlive()) {
+            this.gameActive = false;
+            this.endBattle();
+        }
+    }
+
+    findNearestTarget(unit, enemyUnits, enemyTowers) {
+        let nearest = null;
+        let minDistance = Infinity;
+
+        // Buscar en torres primero
+        enemyTowers.forEach(tower => {
+            const distance = Phaser.Math.Distance.Between(unit.x, unit.y, tower.x, tower.y);
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearest = tower;
+            }
+        });
+
+        // Luego en unidades
+        enemyUnits.forEach(enemy => {
+            const distance = Phaser.Math.Distance.Between(unit.x, unit.y, enemy.x, enemy.y);
+            if (distance < minDistance) {
+                minDistance = distance;
+                nearest = enemy;
+            }
+        });
+
+        return nearest;
+    }
+
+    updateTimer() {
+        if (!this.gameActive) return;
+
+        this.battleTime--;
+        const minutes = Math.floor(this.battleTime / 60);
+        const seconds = this.battleTime % 60;
+        this.timerText.setText(`${minutes}:${seconds.toString().padStart(2, '0')}`);
+
+        if (this.battleTime <= 0) {
+            this.gameActive = false;
+            this.endBattle();
+        }
+    }
+
+    aiMove() {
+        if (!this.gameActive || this.enemy.hand.length === 0) return;
+
+        const card = Phaser.Utils.Array.RandomElement(this.enemy.hand);
+        if (this.enemy.canPlayCard(card)) {
+            const lane = Phaser.Math.RND.Between(0, 2);
+            this.enemy.playCard(card, lane);
+            this.drawHand();
+        }
+    }
+
+    endBattle() {
+        this.gameActive = false;
+        this.time.removeAllEvents();
+
+        let result = 'TIE';
+        if (this.player.getTotalTowerHP() > this.enemy.getTotalTowerHP()) {
+            result = 'WIN';
+        } else if (this.enemy.getTotalTowerHP() > this.player.getTotalTowerHP()) {
+            result = 'LOSE';
+        }
+
+        this.scene.start('ResultScene', { result });
+    }
+
+    shutdown() {
+        this.player.cleanup();
+        this.enemy.cleanup();
+    }
+}
+
+// ==================== RESULT SCENE ====================
+class ResultScene extends Phaser.Scene {
+    constructor() {
+        super({ key: 'ResultScene' });
+    }
+
+    init(data) {
+        this.result = data.result || 'TIE';
+    }
+
+    create() {
+        this.add.rectangle(480, 320, 960, 640, 0x1a1a2e);
+
+        const resultColors = {
+            WIN: { text: '¡VICTORIA!', color: '#00ff00', emoji: '🎉' },
+            LOSE: { text: '¡DERROTA!', color: '#ff0000', emoji: '😞' },
+            TIE: { text: 'EMPATE', color: '#ffff00', emoji: '🤝' },
+        };
+
+        const config = resultColors[this.result];
+
+        this.add.text(480, 150, config.emoji, { fontSize: '64px' }).setOrigin(0.5, 0.5);
+
+        this.add.text(480, 250, config.text, {
+            fontSize: '64px',
+            fill: config.color,
+            fontStyle: 'bold',
+            stroke: '#000000',
+            strokeThickness: 4,
+        }).setOrigin(0.5, 0.5);
+
+        const backButton = this.add.rectangle(480, 400, 200, 60, 0x00ff00);
+        const backButtonText = this.add.text(480, 400, 'MENÚ', {
+            fontSize: '28px',
+            fill: '#000000',
+            fontStyle: 'bold',
+        }).setOrigin(0.5, 0.5);
+
+        backButton.setInteractive();
+        backButton.on('pointerdown', () => {
+            this.scene.start('MenuScene');
+        });
+
+        backButton.on('pointerover', () => {
+            backButton.setFillStyle(0x00cc00);
+        });
+
+        backButton.on('pointerout', () => {
+            backButton.setFillStyle(0x00ff00);
+        });
+    }
+}
+
+// ==================== CREAR JUEGO ====================
+const game = new Phaser.Game(GAME_CONFIG);
+
+    </script>
+</body>
+</html>
